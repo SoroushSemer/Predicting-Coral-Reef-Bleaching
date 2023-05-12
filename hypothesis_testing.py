@@ -44,7 +44,7 @@ col_names = ['site', 'year', 'depth', 'coral_cover', 'jan', 'feb', 'mar', 'apr',
 rdd = rddA.map(lambda row: row.split(','))
 
 def convert_to_float(row):
-    row[2] = int(row[2])
+    row[2] = float(row[2])
     for i in range(4, len(row)):
         row[i] = float(row[i])
     return row
@@ -70,9 +70,57 @@ def convert_to_coral_cover_percent(row):
 
 rdd = rdd.map(convert_to_coral_cover_percent)
 
+only_data = rdd.map(lambda row:  row[2:])
 
-transposed_rdd = rdd.flatMap(lambda row: [(i, str(v)) for i,v in enumerate(row)])\
+transposed_rdd = only_data.flatMap(lambda row: [(i, str(v)) for i,v in enumerate(row)])\
                     .reduceByKey(lambda a,b: a+","+b )\
-                    .map(lambda row: (col_names[row[0]], np.asarray([float(i) for i in row[1].split(',')])))\
+                    .map(lambda row: (col_names[row[0]+2], np.asarray([float(i) for i in row[1].split(',')])))
 
-rdd_print(transposed_rdd,16)
+coral_cover = transposed_rdd.filter(lambda row: row[0] == 'coral_cover').collect()[0][1]
+coral_cover = sc.broadcast(coral_cover)
+
+def pearson(x, y):
+    xmean = np.mean(x)
+    ymean = np.mean(y)
+    
+    denom = math.sqrt(sum([(xi - xmean)**2 for xi in x])*sum([(yi - ymean)**2 for yi in y])) 
+    if denom == 0:
+        return 0
+
+    numer = sum([(x[i]-xmean)*(y[i]-ymean) for i in range(len(x))])
+
+    return numer / denom
+
+pearson_corr = transposed_rdd.map(lambda row: (row[0], pearson(row[1], coral_cover.value), row[1]))
+
+n = rdd.count()
+df = n - 2
+df = sc.broadcast(df)
+def p_val(pearson_corr):
+
+    sqrt_df = math.sqrt(df.value)
+    t_val_numer = pearson_corr * sqrt_df
+    t_val_denom = math.sqrt(1 - pearson_corr**2)
+    t_val = t_val_numer / t_val_denom
+
+    p_val = 2* tdist.sf(abs(t_val), df.value)
+    return p_val
+
+associations = pearson_corr.map(lambda row: (row[0], row[1], p_val(row[1]), row[2]))
+
+print(associations.first())
+
+
+associations = associations.filter(lambda row: row[0] != 'coral_cover').sortBy(lambda row: abs(row[1]))
+associations = associations.collect()
+
+print("Associations with coral cover")
+print("factor\t\tcorrelation\t\tp-value")
+print("------\t\t-----------\t\t------------------------")
+
+for i in associations:
+    print(i[0],"\t\t",round(i[1],7),"\t\t",round(i[2],10))
+
+# rdd_print(associations,16)
+
+
