@@ -24,6 +24,7 @@ from pyspark.context import SparkContext
 from tabulate import tabulate
 random.seed(0)
 
+import matplotlib.pyplot as plt
 
 
 sc = SparkContext()
@@ -139,7 +140,6 @@ print(rddA.count())
 
 #get the column names
 col_names = rdd.first()
-pprint(col_names)
 #filter out the header
 rdd = rdd.filter(lambda row: row != col_names)
 
@@ -202,9 +202,60 @@ def get_p_val(row):
 
 rdd_with_p = rdd_with_t.map(get_p_val)
 
-results = rdd_with_p.sortBy(lambda row: abs(row[-1])).map(lambda row: [row[0],row[col_names.index('REEF_NAME')],row[col_names.index('depth')],str(row[-1])])
+results = rdd_with_p.sortBy(lambda row: abs(row[-1]))\
+                    .map(lambda row: [row[0],row[col_names.index('REEF_NAME')],row[col_names.index('depth')],str(row[-1])])
 
 results = results.collect()
+
+def convert_bleach_thresholds(row):
+    bleach_conversions = {
+            "0": 0.0,
+            "1L":0.05,
+            "1U":0.10,
+            "2L":0.20,
+            "2U":0.30,
+            "3L":0.40,
+            "3U":0.50,
+            "4L":0.625,
+            "4U":0.75,
+            "5L":0.875,
+            "5U":1.0
+        }
+    start = col_names.index('1997')
+    end = col_names.index('2021')
+    for i in range(start, end+1):
+        if(row[i] != ''):
+            row[i] = bleach_conversions[row[i][:2]]
+    return row
+
+at_danger = rdd_with_p.filter(lambda row: row[-1]<0.05)\
+                        .map(convert_bleach_thresholds)\
+                        .map(lambda row: [row[0],row[col_names.index('REEF_NAME')],row[col_names.index('depth')],[float(row[i]) for i in range(col_names.index('1997-01'), col_names.index('2021-12')+1)], row[col_names.index('1997'):col_names.index('2021')+1]])\
+                        .collect()
+
+
+x = col_names[col_names.index('1997-01'):col_names.index('2021-12')+1]
+y = [bleach_threshold for i in range(len(x))]
+plt.plot(x,y, label='Bleaching Threshold', linestyle='--')
+
+for row in at_danger:
+    plt.plot(x, row[3], label=row[0]+" "+row[1] +" @"+str(round(float(row[2]),1))+"m")
+
+plt.xticks([str(i)+"-01" for i in range(1997,2022,2)])
+plt.ylabel('Water Temperature (°C)')
+plt.xlabel('Month')
+plt.legend()
+plt.show()
+
+x = col_names[col_names.index('1997'):col_names.index('2021')+1]
+for row in at_danger:
+    plt.plot(x, row[4], label=row[0]+" "+row[1] +" @"+str(round(float(row[2]),1))+"m")
+
+plt.xticks([str(i) for i in range(1997,2022,2)])
+plt.ylabel('Coral Cover')
+plt.xlabel('Year')
+plt.legend()
+plt.show()
 
 print("Reefs significantly above bleach threshold")
 print(tabulate(results, headers=['Site','Reef','Depth','p-value']))
