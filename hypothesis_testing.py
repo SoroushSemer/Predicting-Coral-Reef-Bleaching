@@ -21,7 +21,7 @@ from scipy.stats import t as tdist # this is solely to use for the cdf of the t 
 
 from pyspark.sql import SparkSession
 from pyspark.context import SparkContext
-
+from tabulate import tabulate
 random.seed(0)
 
 
@@ -34,8 +34,9 @@ def rdd_print(rdd, val:int):
     for i in vals:
         print(i)
 
+#hypothesis testing significant months
 
-filename = sys.argv[1] #the data file to read into a stream
+filename = 'temperature_reef_by_month_1_9\output.csv' #the data file to read into a stream
 
 #read the file into the rdd
 rddA = sc.textFile(filename)
@@ -124,3 +125,86 @@ for i in associations:
 # rdd_print(associations,16)
 
 
+
+#hypothesis testing bleach thresholds
+
+filename = 'temperature_reef_by_month_1_9\All_Depths copy.csv' #the data file to read into a stream
+
+#read the file into the rdd
+rdd = sc.textFile(filename)
+
+#split the rdd into csv format
+rdd = rdd.map(lambda row: row.split(','))
+print(rddA.count())
+
+#get the column names
+col_names = rdd.first()
+pprint(col_names)
+#filter out the header
+rdd = rdd.filter(lambda row: row != col_names)
+
+def get_mean_n(row):
+    start = col_names.index('1997-01')
+    end = col_names.index('2021-12')
+    total = 0
+    n = 0
+    for i in range(start, end+1):
+        if(row[i] != ''):
+            total += float(row[i])
+            n += 1
+    mean = total / n
+    row.append(mean)
+    row.append(n)
+
+    return row
+rdd_with_mean_n = rdd.map(get_mean_n)
+
+def get_stdev(row):
+    start = col_names.index('1997-01')
+    end = col_names.index('2021-12')
+    mean = row[-2]
+    total = 0
+    for i in range(start, end+1):
+        if(row[i] != ''):
+            total += (float(row[i]) - mean)**2
+
+    stdev = math.sqrt(total / (row[-1]-1))
+    row.append(stdev)
+    return row
+
+rdd_with_mean_n_stdev = rdd_with_mean_n.map(get_stdev)
+
+# bleach_thresholds = {
+#     1: 30.0,
+#     2: 27.7,
+#     3: 27.5,
+#     4: 28.8,
+#     5: 0.40,
+#     6: 0.50,
+#     7: 0.625,
+#     8: 0.75,
+#     9: 0.875,
+# }
+
+bleach_threshold = 28.6111
+
+def get_t_val(row):
+    t = (row[-3] - bleach_threshold) / (row[-1] / math.sqrt(row[-2]))
+    row.append(t)
+    return row
+
+rdd_with_t = rdd_with_mean_n_stdev.map(get_t_val)
+
+def get_p_val(row):
+    p = tdist.sf(row[-1], row[-3])
+    row.append(p)
+    return row
+
+rdd_with_p = rdd_with_t.map(get_p_val)
+
+results = rdd_with_p.sortBy(lambda row: abs(row[-1])).map(lambda row: [row[0],row[col_names.index('REEF_NAME')],row[col_names.index('depth')],str(row[-1])])
+
+results = results.collect()
+
+print("Reefs significantly above bleach threshold")
+print(tabulate(results, headers=['Site','Reef','Depth','p-value']))
